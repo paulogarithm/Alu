@@ -1,1 +1,1 @@
-# Alu
+<h1 align=center> Alu </h1>
