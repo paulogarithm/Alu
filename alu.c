@@ -4,6 +4,12 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <bits/stdint-uintn.h>
+#include <bits/stdint-intn.h>
+#include <time.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <stdio.h>
 
@@ -21,17 +27,23 @@
     if (pointer != null) \
         free(pointer);
 
-#define return_e(ret, A, msg)        \
-    do                               \
-    {                                \
-        printf("[ERROR] %s\n", msg); \
-        A->error = msg;              \
-        return ret;                  \
+#define return_e(ret, A, msg)                                   \
+    do                                                          \
+    {                                                           \
+        printf("[ERROR] %s:%d %s \n", __FILE__, __LINE__, msg); \
+        A->error = msg;                                         \
+        return ret;                                             \
     } while (0)
 
 #define check(A, ret)       \
     if (A == null or errno) \
         return ret;
+
+#define ALU_VER_MAJ 0
+#define ALU_VER_MIN 2
+#define ALU_VER_NUM (ALU_VER_MAJ * 100 + ALU_VER_MIN)
+
+#define ALU_SIGNATURE "\x1BALU"
 
 /**
  *
@@ -39,10 +51,12 @@
  *
  */
 
+typedef uint8_t alu_Byte;
 typedef double alu_Number;
 typedef char *alu_String;
+typedef unsigned int alu_Size;
 
-typedef enum _alu_Type
+typedef enum
 {
     ALU_NULL = 0,
     ALU_NUMBER,
@@ -50,7 +64,29 @@ typedef enum _alu_Type
     ALU_BOOL,
 } alu_Type;
 
-typedef enum _alu_Eval
+typedef enum
+{
+    // General
+    OP_HALT = 0x00,
+
+    // Stack
+    OP_PUSHNUM,
+    OP_PUSHSTR,
+    OP_PUSHBOOL,
+    OP_SUMSTACK,
+    OP_STACKCLOSE,
+    OP_EVAL,
+
+    // Registers
+    OP_LOAD,
+    OP_UNLOAD,
+    OP_DEFUNLOAD,
+
+    // End
+    OP_END
+} alu_Opcode;
+
+typedef enum
 {
     EVAL_EQUALS = (1 << 0),
     EVAL_SMALLER = (1 << 1),
@@ -69,21 +105,68 @@ typedef struct s_stack
     struct s_stack *next;
 } alu_Stack;
 
+typedef struct s_stack2
+{
+    void *data;
+    struct s_stack2 *next;
+    struct s_stack2 *previous;
+} alu_Stack2;
+
 typedef struct
 {
-    char *error;
+    alu_String error;
     alu_Stack *stack;
     alu_Stack *garbage;
     alu_Stack *regs;
-    alu_Stack *instructions;
+    alu_Stack2 *instructions;
+    alu_Size seed;
     size_t pc;
 } alu_State;
 
 typedef struct
 {
-    size_t index;
+    alu_Size index;
     alu_Variable *var;
 } alu_Register;
+
+typedef void (*func0_t)(void *A);                   // 0
+typedef void (*func1_t)(void *A, alu_Size);         // 1
+typedef void (*func2_t)(void *A, alu_Number);       // 2
+typedef void (*func3_t)(void *A, const alu_String); // 3
+typedef void (*func4_t)(void *A, alu_Byte);         // 4
+
+typedef struct
+{
+    void *func;
+    alu_Byte argument;
+} alu_StructOpcode;
+
+/**
+ *
+ * @category Static arrays & Declarations
+ *
+ */
+
+void Alu_stackclose(alu_State *A);
+void Alu_sumstack(alu_State *A);
+void Alu_load(alu_State *A, alu_Size);
+void Alu_unload(alu_State *A, alu_Size);
+void Alu_pushnumber(alu_State *A, alu_Number);
+void Alu_pushstring(alu_State *A, const alu_String);
+void Alu_pushbool(alu_State *A, _Bool);
+void Alu_eval(alu_State *A, alu_Byte);
+
+static const alu_StructOpcode F[] = {
+    [OP_HALT] = {null, 0},
+    [OP_STACKCLOSE] = {Alu_stackclose, 0},
+    [OP_SUMSTACK] = {Alu_sumstack, 0},
+    [OP_LOAD] = {Alu_load, 1},
+    [OP_UNLOAD] = {Alu_unload, 1},
+    [OP_PUSHNUM] = {Alu_pushnumber, 2},
+    [OP_PUSHSTR] = {Alu_pushstring, 3},
+    [OP_PUSHBOOL] = {Alu_pushbool, 4},
+    [OP_EVAL] = {Alu_eval, 4},
+};
 
 /**
  *
@@ -99,6 +182,47 @@ int faststrcmp(const char *s1, const char *s2)
         ;
     return SIGNIFY((unsigned char)*s1 - (unsigned char)*s2);
 }
+
+char *strcut(const char *str, size_t from, size_t to)
+{
+    size_t size = to - from;
+    char *buf = (char *)malloc((size + 1) * sizeof(char));
+    memset(buf, 0, size + 1);
+    if (buf == null)
+        return null;
+    for (size_t n = 0; str[n + from] != '\0' and n < size; ++n)
+        buf[n] = str[n + from];
+    buf[size] = '\0';
+    return buf;
+}
+
+int bytesint(const alu_Byte *bytes)
+{
+    int result = 0;
+    for (unsigned short i = 0; i < sizeof(int); ++i)
+        result = (result << 8) | bytes[i];
+    return result;
+}
+
+double bytesdouble(const unsigned char *bytes)
+{
+    union
+    {
+        double d;
+        uint64_t u;
+    } value;
+    value.u = 0;
+    int shift = 0;
+    for (int i = sizeof(double) - 1; i >= 0; i--)
+        value.u |= ((uint64_t)bytes[i] << (shift++ * 8));
+    return value.d;
+}
+
+/**
+ *
+ * @category Stack functions
+ *
+ */
 
 // Return a pointer to the last element of the stack.
 alu_Stack *Stack_top(alu_Stack *from)
@@ -125,9 +249,9 @@ void Stack_push(alu_Stack **stack, void *data)
 }
 
 // Get the stack len from a pointer.
-size_t Stack_len(alu_Stack *from)
+alu_Size Stack_len(alu_Stack *from)
 {
-    size_t n = 0;
+    alu_Size n = 0;
     if (from == null)
         return n;
     for (; from->next != null; ++n)
@@ -146,6 +270,35 @@ void Stack_view(alu_Stack *from)
             printf(" -> ");
     }
     printf("]\n");
+}
+
+/**
+ *
+ * @category Stack2 functions
+ *
+ */
+
+alu_Stack2 *Stack2_top(alu_Stack2 *from)
+{
+    if (from == null)
+        return null;
+    for (; from->next != null;)
+        from = from->next;
+    return from;
+}
+
+void Stack2_push(alu_Stack2 **stack, void *data)
+{
+    alu_Stack2 *slate = (alu_Stack2 *)malloc(sizeof(alu_Stack2));
+    if (slate == null)
+        return;
+    slate->previous = *stack;
+    slate->next = null;
+    slate->data = data;
+    if (*stack == null)
+        *stack = slate;
+    else
+        Stack2_top(*stack)->next = slate;
 }
 
 /**
@@ -310,7 +463,7 @@ alu_Variable *Alu_pop(alu_State *A)
 }
 
 // Get a variable from the stack index.
-alu_Variable *Alu_get(alu_State *A, size_t index)
+alu_Variable *Alu_get(alu_State *A, alu_Size index)
 {
     alu_Stack *link = null;
     check(A, null);
@@ -324,7 +477,7 @@ alu_Variable *Alu_get(alu_State *A, size_t index)
 
 /// Get a alu_Number from the Stack.
 /// `Stack -> Code`
-alu_Number Alu_getnumber(alu_State *A, size_t index)
+alu_Number Alu_getnumber(alu_State *A, alu_Size index)
 {
     alu_Variable *var = Alu_get(A, index);
     if (var == null)
@@ -334,7 +487,7 @@ alu_Number Alu_getnumber(alu_State *A, size_t index)
 
 /// Get a boolean from the stack.
 /// `Stack -> Code`
-_Bool Alu_getbool(alu_State *A, size_t index)
+_Bool Alu_getbool(alu_State *A, alu_Size index)
 {
     alu_Variable *var = Alu_get(A, index);
     if (var == null)
@@ -344,11 +497,11 @@ _Bool Alu_getbool(alu_State *A, size_t index)
 
 /// Get a string from the stack.
 /// `Stack -> Code`
-alu_String Alu_getstring(alu_State *A, size_t index)
+alu_String Alu_getstring(alu_State *A, alu_Size index)
 {
     alu_Variable *var = Alu_get(A, index);
     if (var == null)
-        return 0;
+        return "";
     return (alu_String)var->data;
 }
 
@@ -432,7 +585,7 @@ void Alu_registerclose(alu_State *A)
 
 /// Set the value of stack[0] as a deep register.
 /// `Stack -> Deep`
-void Alu_load(alu_State *A, size_t registerIndex)
+void Alu_load(alu_State *A, alu_Size registerIndex)
 {
     alu_Variable *var = null;
     alu_Register *reg = null;
@@ -462,7 +615,7 @@ void Alu_load(alu_State *A, size_t registerIndex)
 
 /// Get the deep register and push it in the stack.
 /// `Deep -> Stack`
-void Alu_unload(alu_State *A, size_t registerIndex)
+void Alu_unload(alu_State *A, alu_Size registerIndex)
 {
     alu_Variable *var = null;
 
@@ -478,11 +631,11 @@ void Alu_unload(alu_State *A, size_t registerIndex)
 }
 
 /// Time to abandonned register ! (General Grievous)
-/// 
+///
 /// Basically removes the register value and push it into
 /// the stack.
 /// `Deep -> Stack`
-void Alu_defunload(alu_State *A, size_t registerIndex)
+void Alu_defunload(alu_State *A, alu_Size registerIndex)
 {
     alu_Stack *rgStack = null;
     alu_Variable *var = null;
@@ -508,6 +661,13 @@ void Alu_defunload(alu_State *A, size_t registerIndex)
  *
  */
 
+static alu_Size __Alu_seedgen(alu_State *A)
+{
+    size_t bigseed = 0;
+    bigseed += (size_t)&A + (size_t)time(NULL) + (size_t)&__Alu_seedgen;
+    return (alu_Size)bigseed;
+}
+
 // Creates an `alu_State`.
 alu_State *Alu_newstate(void)
 {
@@ -516,6 +676,7 @@ alu_State *Alu_newstate(void)
         return null;
     memset(A, 0, sizeof(alu_State));
     signal(SIGINT, __Alu_sighandler);
+    A->seed = __Alu_seedgen(A);
     return A;
 }
 
@@ -538,12 +699,11 @@ void Alu_garbageclose(alu_State *A)
 /// Close the `instructions`.
 void Alu_instructionclose(alu_State *A)
 {
-    alu_Stack *tmp = null;
-    alu_String *str = null;
+    alu_Stack2 *tmp = null;
     while (A->instructions != null)
     {
         tmp = A->instructions->next;
-        remove(str);
+        remove(A->instructions->data);
         remove(A->instructions);
         A->instructions = tmp;
     }
@@ -558,11 +718,12 @@ int Alu_close(alu_State *A)
         return 1;
     if (A->error or res)
     {
-        fprintf(stderr, "\n| [ERROR] Program ends with an error:\n| %s\n", A->error);
+        fprintf(stderr, "| [ERROR] Program ends with an error:\n| %s\n", A->error);
         res = 1;
     }
     Alu_stackclose(A);
     Alu_garbageclose(A);
+    Alu_instructionclose(A);
     Alu_registerclose(A);
     remove(A);
     return res;
@@ -570,9 +731,9 @@ int Alu_close(alu_State *A)
 
 /// Evaluate stack[0] and stack[1] and compared with eval.
 /// Pushes true or false in the stack.
-void Alu_eval(alu_State *A, alu_Eval eval)
+void Alu_eval(alu_State *A, alu_Byte eval)
 {
-    char ev = 0, cmpres = 0;
+    int8_t ev = 0, cmpres = 0;
     alu_Variable *a = null, *b = null;
 
     if (Stack_len(A->stack) < 1)
@@ -595,10 +756,113 @@ void Alu_eval(alu_State *A, alu_Eval eval)
     Alu_pushbool(A, ev & eval);
 }
 
-/// Feed the state with raw instructions.
-void __Alu_feed(alu_State *A, const char *begin, size_t n)
+/// Returns the number of bytes there is from the OP code to the end
+/// of an instruction.
+size_t __Alu_readop(alu_Opcode op, const char *ptr)
 {
-    A->instructions = null;
+    size_t size = 0;
+    switch (F[op].argument)
+    {
+    case 1:
+        return sizeof(alu_Size);
+    case 2:
+        return sizeof(alu_Number);
+    case 3:
+        while (*ptr != '\0')
+            ++ptr, ++size;
+        return size;
+    case 4:
+        return sizeof(alu_Byte);
+    default:
+        return 0;
+    }
+}
+
+/// Feed the state instruction with a raw instruction string.
+void Alu_feed(alu_State *A, const alu_String ptr)
+{
+    alu_Byte op = 0x00;
+    char *str = null;
+    size_t n = 0, readlen = 0;
+    do
+    {
+        op = (alu_Byte)ptr[n];
+        if ((op == OP_HALT) or (op > OP_END))
+            break;
+        readlen = __Alu_readop(op, ptr);
+        str = strcut(ptr, n, n + readlen + 1);
+        n += readlen + 1;
+        Stack2_push(&A->instructions, str);
+    } while (true);
+}
+
+// Execute the opcode instruction.
+void __Alu_executeop(alu_State *A, alu_Opcode op, const alu_Byte *instructions)
+{
+    alu_String str = null;
+    switch (F[op].argument)
+    {
+    case 0: // A
+        ((func0_t)F[op].func)(A);
+        break;
+    case 1: // A, alu_Size
+        ((func1_t)F[op].func)(A, (alu_Size)bytesint(instructions + 1));
+        break;
+    case 2: // A, alu_Number
+        ((func2_t)F[op].func)(A, (alu_Number)bytesdouble(instructions + 1));
+        break;
+    case 3: // A, alu_String
+        str = strcut((char *)instructions, 1, strlen((char *)instructions + 1) + 1);
+        ((func3_t)F[op].func)(A, str);
+        remove(str);
+        break;
+    case 4:
+        ((func4_t)F[op].func)(A, *(instructions + 1));
+    default:
+        break;
+    }
+}
+
+// Executes the instruction set.
+void Alu_execute(alu_State *A)
+{
+    alu_Stack2 *instruction = A->instructions;
+    alu_Byte op = 0x00;
+    while (instruction != null)
+    {
+        op = ((alu_Byte *)instruction->data)[0];
+        printf("[0x%02x]\n", op);
+        __Alu_executeop(A, op, (alu_Byte *)instruction->data);
+        instruction = instruction->next;
+    }
+}
+
+void Alu_start(alu_State *A, const alu_String input)
+{
+    Alu_feed(A, input);
+    Alu_execute(A);
+}
+
+void Alu_startfile(alu_State *A, const alu_String filename)
+{
+    int fd = open(filename, O_RDONLY);
+    char *buffer = null;
+    struct stat st = {0};
+    if (fd == -1)
+        return_e(, A, strerror(errno));
+    if (stat(filename, &st) == -1)
+        return_e(, A, strerror(errno));
+    buffer = malloc(sizeof(char) * (st.st_size + 1));
+    if (buffer == null)
+        return_e(, A, strerror(errno));
+    memset(buffer, 0, st.st_size);
+    if (read(fd, buffer, st.st_size) == -1)
+    {
+        remove(buffer);
+        return_e(, A, strerror(errno));
+    }
+    Alu_start(A, buffer);
+    remove(buffer);
 }
 
 /* Main */
@@ -607,38 +871,8 @@ int main(void)
 {
     alu_State *A = Alu_newstate();
 
-    // let a = "Hello"
-    Alu_pushstring(A, "Hello");
-    Alu_load(A, 0);
-
-    // let b = a + "World"
-    Alu_unload(A, 0);
-    Alu_pushstring(A, "World");
-    Alu_sumstack(A);
-    Alu_load(A, 1);
-
-    // b = b + a
-    Alu_unload(A, 1);
-    Alu_unload(A, 0);
-    Alu_sumstack(A);
-    Alu_load(A, 1);
-
-    // <cprintf>(a, b) // Hello, HelloWorldHello
-    Alu_unload(A, 0);
-    Alu_unload(A, 1);
-    printf("%s, %s\n", Alu_getstring(A, 0), Alu_getstring(A, 1));
-    Alu_stackclose(A);
+    Alu_startfile(A, "code.alu");
+    printf("%s\n", Alu_getstring(A, 0));
     
-    // let foo = 3 + 10
-    Alu_pushnumber(A, 3);
-    Alu_pushnumber(A, 10);
-    Alu_sumstack(A);
-    Alu_load(A, 2);
-
-    // <cprintf>(foo > 6) // true
-    Alu_unload(A, 2);
-    Alu_pushnumber(A, 6);
-    Alu_eval(A, EVAL_GREATER);
-    printf("%s\n", Alu_getbool(A, 0) ? "true" : "false");
     return Alu_close(A);
 }
