@@ -1,0 +1,10 @@
+  [1]   PUSHSTR "Foo"
+  [2]   PUSHSTR "Foo"
+  [3]   EVAL eq
+  [4]   JFA 3                   // To 8
+  [5]   STACKCLOSE
+  [6]   PUSHSTR "Same!"
+  [7]   JMP 2                   // To 10
+  [8]   STACKCLOSE
+  [9]   PUSHSTR "Different!"
+ [10]   HALT

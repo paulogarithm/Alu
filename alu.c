@@ -1,11 +1,17 @@
+/**
+ * Copyright (C) 2023 Paul Parisot
+ *
+ * This software has no warranty.
+ * See the LICENSE file for more informations.
+ */
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <iso646.h>
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
-#include <bits/stdint-uintn.h>
-#include <bits/stdint-intn.h>
+#include <stdint.h>
 #include <time.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -68,6 +74,13 @@ typedef enum
 {
     // General
     OP_HALT = 0x00,
+
+    // Jumps
+    OP_JMP,  // Jump
+    OP_JTR,  // Jump if s0 == true
+    OP_JFA,  // Jump if s0 == false
+    OP_JEM,  // Jump if stack is empty
+    OP_JNEM, // Jump if something is in the stack
 
     // Stack
     OP_PUSHNUM,
@@ -160,10 +173,14 @@ static const alu_StructOpcode F[] = {
     [OP_HALT] = {null, 0},
     [OP_STACKCLOSE] = {Alu_stackclose, 0},
     [OP_SUMSTACK] = {Alu_sumstack, 0},
+
     [OP_LOAD] = {Alu_load, 1},
     [OP_UNLOAD] = {Alu_unload, 1},
+
     [OP_PUSHNUM] = {Alu_pushnumber, 2},
+
     [OP_PUSHSTR] = {Alu_pushstring, 3},
+
     [OP_PUSHBOOL] = {Alu_pushbool, 4},
     [OP_EVAL] = {Alu_eval, 4},
 };
@@ -190,7 +207,8 @@ char *strcut(const char *str, size_t from, size_t to)
     memset(buf, 0, size + 1);
     if (buf == null)
         return null;
-    for (size_t n = 0; str[n + from] != '\0' and n < size; ++n)
+    // for (size_t n = 0; str[n + from] != '\0' and n < size; ++n)
+    for (size_t n = 0; n < size; ++n)
         buf[n] = str[n + from];
     buf[size] = '\0';
     return buf;
@@ -761,6 +779,8 @@ void Alu_eval(alu_State *A, alu_Byte eval)
 size_t __Alu_readop(alu_Opcode op, const char *ptr)
 {
     size_t size = 0;
+    if ((op >= OP_JMP) and (op <= OP_JNEM))
+        return sizeof(alu_Size);
     switch (F[op].argument)
     {
     case 1:
@@ -823,6 +843,44 @@ void __Alu_executeop(alu_State *A, alu_Opcode op, const alu_Byte *instructions)
     }
 }
 
+// Returns true if the jump instruction is valid.
+_Bool __Alu_needtojump(alu_State *A, alu_Opcode op)
+{
+    alu_Variable *var = null;
+
+    if (op == OP_JMP)
+        return true;
+    if (A->stack == null and op == OP_JEM)
+        return true;
+    if (A->stack == null)
+        return false;
+    var = ((alu_Variable *)A->stack->data);
+    switch (op)
+    {
+    case OP_JFA:
+        return (var->type == ALU_BOOL) and (*((_Bool *)var->data) == false);
+    case OP_JTR:
+        return (var->type == ALU_BOOL) and (*((_Bool *)var->data) == true);
+    default:
+        return true;
+    }
+}
+
+// Execute an OP_JUMP action.
+void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
+{
+    if (not __Alu_needtojump(A, op))
+    {
+        printf("> Skip\n");
+        (*iptr) = (*iptr)->next;
+        return;
+    }
+    int jumps = bytesint(((alu_Byte *)(*iptr)->data) + 1) + 1;
+    printf("> %d\n", jumps);
+    while (jumps-- and (*iptr != null))
+        (*iptr) = (*iptr)->next;
+}
+
 // Executes the instruction set.
 void Alu_execute(alu_State *A)
 {
@@ -831,7 +889,12 @@ void Alu_execute(alu_State *A)
     while (instruction != null)
     {
         op = ((alu_Byte *)instruction->data)[0];
-        printf("[0x%02x]\n", op);
+        printf("Executes %02x\n", op);
+        if (op >= OP_JMP and op <= OP_JNEM)
+        {
+            Alu_jump(A, op, &instruction);
+            continue;
+        }
         __Alu_executeop(A, op, (alu_Byte *)instruction->data);
         instruction = instruction->next;
     }
@@ -871,8 +934,64 @@ int main(void)
 {
     alu_State *A = Alu_newstate();
 
-    Alu_startfile(A, "code.alu");
+    char input[] = {
+        OP_PUSHSTR, // 1
+        'F',
+        'o',
+        'o',
+        '\0',
+
+        OP_PUSHSTR, // 2
+        'F',
+        'o',
+        'o',
+        '\0',
+
+        OP_EVAL, // 3
+        EVAL_EQUALS,
+
+        OP_JFA, // 4
+        0,
+        0,
+        0,
+        2,
+
+        OP_STACKCLOSE, // 5
+
+        OP_PUSHSTR, // 6
+        'S',
+        'a',
+        'm',
+        'e',
+        '!',
+        '\0',
+
+        OP_JMP, // 7
+        0,
+        0,
+        0,
+        2,
+
+        OP_STACKCLOSE, // 8
+
+        OP_PUSHSTR, // 9
+        'D',
+        'i',
+        'f',
+        'f',
+        'e',
+        'r',
+        'e',
+        'n',
+        't',
+        '!',
+        '\0',
+
+        OP_HALT, // 10
+    };
+
+    Alu_start(A, input);
     printf("%s\n", Alu_getstring(A, 0));
-    
+
     return Alu_close(A);
 }
