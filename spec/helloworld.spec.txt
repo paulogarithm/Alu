@@ -1,0 +1,10 @@
+print("Hello", "world")
+
+<instructions:1>
+
+[0]
+    pushstr     "Hello"         // [ "Hello" ]
+    pushstr     "world"         // [ "Hello", "world" ]
+    pushdef     "print"         // [ "Hello", "world", function ]
+    supercall                   // [ ]
+    halt

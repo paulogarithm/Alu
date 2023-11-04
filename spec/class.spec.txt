@@ -1,0 +1,48 @@
+class Object is
+    let foo
+    constructor toto = 3
+
+    constructor func new(idk)
+        self.foo = idk
+    end
+    func bar()
+    end
+end
+let a = Object.new(42)
+a.bar()
+print(a.foo)
+
+<instructions:3>
+
+[0]
+    ret
+[1]
+    unload      1           // [ 42, {...} ]                    line 5
+    super                   // [ {...}, 42 ]
+    impl        "foo"       // [ {...} ]
+    ret
+[2]
+    pushtable                   // [ {} ]                       __constructor
+    pushinst    1               // [ {}, function ]
+    pushnumber  3               // [ {}, function, 3 ]
+    impl        "new"           // [ {...}, 3]
+    impl        "toto"          // [ {...} ]
+    load        0               // [ ]
+    pushtable                   // [ {} ]                       __emptyself
+    pushinst    2               // [ {}, function ]
+    impl        "bar"           // [ {...} ]
+    load        1               // [ ]
+    unload      0               // [ {...} ]                    line 12
+    querry      "new"           // [ function ]
+    pushnumber  42              // [ function, 42 ]
+    call                        // [ {...} ]
+    load        2               // [ ]
+    unload      2               // [ {...} ]                    line 13
+    querry      "bar"           // [ function ]
+    unloadref   2               // [ function, abstract ]
+    call                        // [ ]
+    unload      2               // [ {...} ]                    line 14
+    querry      "foo"           // [ any ]
+    pushdef     "print"         // [ any, function ]
+    supercall                   // [ ]
+    halt

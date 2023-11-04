@@ -1,0 +1,23 @@
+let a = { bar = "foo" }
+a.toto = 42
+print(a.bar, 69, a.toto)
+
+<instructions:1>
+
+[0]
+    pushtable                   // [ {} ]                       line 1
+    pushstr     "foo"           // [ {}, "foo" ]
+    impl        "bar"           // [ {...} ]
+    load        0               // [ ]
+    unload      0               // [ {...} ]                    line 2
+    pushnumber  42              // [ {...}, 42 ]
+    impl        "toto"          // [ {...} ]
+    load        0               // [ ]
+    unload      0               // [ {...} ]                    line 3
+    querry      "bar"           // [ "foo" ]
+    pushnumber  69              // [ "foo", 69 ]
+    unload      0               // [ "foo", 69, {...} ]
+    super                       // [ {...}, "foo", 69 ]
+    querry      "toto"          // [ "foo", 69, 42 ]
+    pushdef     "print"         // [ "foo", 69, 42, function ]
+    supercall                   // [ ]

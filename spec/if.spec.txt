@@ -1,0 +1,23 @@
+if "Foo" == "Foo" then
+	print("Same")
+else
+	print("Different")
+end
+
+<instructions:1>
+
+[0]
+  	pushstr   	"Foo"			// [ "Foo" ]					line 1
+  	pushstr   	"Foo"			// [ "Foo", "Foo" ]
+  	eval    	eq				// [ true ]
+	jfa 		3				// [ true ]						-> line 3
+	stackclose					// [ ]
+	pushstr 	"Same"			// [ "Same" ]					line 2
+	pushdef 	"print"			// [ "Same", function ]
+	supercall					// [ ]
+	jmp 		5				// [ ]							-> line 5
+	stackclose					// [ ]							line 3
+	pushstr 	"Different"		// [ "Different" ]				line 4
+	pushdef 	"print"			// [ "Different", function ]
+	supercall					// [ ]
+	halt														line 5

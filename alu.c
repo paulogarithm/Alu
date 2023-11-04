@@ -60,7 +60,7 @@
 typedef uint8_t alu_Byte;
 typedef double alu_Number;
 typedef char *alu_String;
-typedef unsigned int alu_Size;
+typedef uint32_t alu_Size;
 
 typedef enum
 {
@@ -74,6 +74,7 @@ typedef enum
 {
     // General
     OP_HALT = 0x00,
+    OP_RET,
 
     // Jumps
     OP_JMP,  // Jump
@@ -788,8 +789,8 @@ size_t __Alu_readop(alu_Opcode op, const char *ptr)
     case 2:
         return sizeof(alu_Number);
     case 3:
-        while (*ptr != '\0')
-            ++ptr, ++size;
+        while (ptr[size] != '\0')
+            ++size;
         return size;
     case 4:
         return sizeof(alu_Byte);
@@ -804,16 +805,22 @@ void Alu_feed(alu_State *A, const alu_String ptr)
     alu_Byte op = 0x00;
     char *str = null;
     size_t n = 0, readlen = 0;
+    printf("=== Begin of instructions ===\n");
     do
     {
         op = (alu_Byte)ptr[n];
         if ((op == OP_HALT) or (op > OP_END))
             break;
-        readlen = __Alu_readop(op, ptr);
+        readlen = __Alu_readop(op, &ptr[n]);
         str = strcut(ptr, n, n + readlen + 1);
         n += readlen + 1;
+        printf("Get: ");
+        for (size_t i = 0; i <= readlen; ++i)
+            printf("%02x ", str[i]);
+        printf("\n");
         Stack2_push(&A->instructions, str);
     } while (true);
+    printf("Get: 00\n===  End of instructions  ===\n\n");
 }
 
 // Execute the opcode instruction.
@@ -871,14 +878,16 @@ void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
 {
     if (not __Alu_needtojump(A, op))
     {
-        printf("> Skip\n");
-        (*iptr) = (*iptr)->next;
+        printf("Dont jump\n");
+        *iptr = (*iptr)->next;
+        Alu_popk(A);
         return;
     }
     int jumps = bytesint(((alu_Byte *)(*iptr)->data) + 1) + 1;
-    printf("> %d\n", jumps);
+    printf("Jump %d instructions\n", jumps);
     while (jumps-- and (*iptr != null))
-        (*iptr) = (*iptr)->next;
+        *iptr = (*iptr)->next;
+    Alu_popk(A);
 }
 
 // Executes the instruction set.
@@ -889,6 +898,8 @@ void Alu_execute(alu_State *A)
     while (instruction != null)
     {
         op = ((alu_Byte *)instruction->data)[0];
+        if (op == OP_RET)
+            return;
         printf("Executes %02x\n", op);
         if (op >= OP_JMP and op <= OP_JNEM)
         {
@@ -903,6 +914,14 @@ void Alu_execute(alu_State *A)
 void Alu_start(alu_State *A, const alu_String input)
 {
     Alu_feed(A, input);
+    alu_Stack2 *inst = A->instructions;
+    unsigned int n = 0;
+    while (inst != null)
+    {
+        inst = inst->next;
+        ++n;
+    }
+    printf("There is %d instructions\n", n);
     Alu_execute(A);
 }
 
@@ -928,70 +947,34 @@ void Alu_startfile(alu_State *A, const alu_String filename)
     remove(buffer);
 }
 
+void Alu_stackview(alu_State *A)
+{
+    alu_Stack *ptr = A->stack;
+    printf("[ ");
+    while (ptr != null)
+    {
+        printf("%d", *(alu_Size *)((alu_Variable *)ptr->data)->data);
+        printf("%s", ptr->next ? ", " : "");
+        ptr = ptr->next;
+    }
+    printf(" ]\n");
+}
+
 /* Main */
 
 int main(void)
 {
     alu_State *A = Alu_newstate();
-
     char input[] = {
-        OP_PUSHSTR, // 1
-        'F',
-        'o',
-        'o',
-        '\0',
-
-        OP_PUSHSTR, // 2
-        'F',
-        'o',
-        'o',
-        '\0',
-
-        OP_EVAL, // 3
-        EVAL_EQUALS,
-
-        OP_JFA, // 4
-        0,
-        0,
-        0,
-        2,
-
-        OP_STACKCLOSE, // 5
-
-        OP_PUSHSTR, // 6
-        'S',
-        'a',
-        'm',
-        'e',
-        '!',
-        '\0',
-
-        OP_JMP, // 7
-        0,
-        0,
-        0,
-        2,
-
-        OP_STACKCLOSE, // 8
-
-        OP_PUSHSTR, // 9
-        'D',
-        'i',
-        'f',
-        'f',
-        'e',
-        'r',
-        'e',
-        'n',
-        't',
-        '!',
-        '\0',
-
-        OP_HALT, // 10
+        OP_PUSHBOOL,    true,
+        OP_JTR,         0, 0, 0, 2,
+        OP_PUSHSTR,     'H', 'e', 'l', 'l', 'o', '\0',
+        OP_RET,
+        OP_PUSHSTR,     'F', 'o', 'o', '\0',
+        OP_RET,
+        OP_HALT,
     };
-
     Alu_start(A, input);
     printf("%s\n", Alu_getstring(A, 0));
-
     return Alu_close(A);
 }

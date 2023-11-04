@@ -1,0 +1,25 @@
+func Max(a, b)
+    if a < b then return b else return a end
+end
+
+let a = Max(42, 69)
+print(a)
+
+<instructions:2>
+
+[0]
+    evalnice    sm              // [ false, 42, 69 ]
+    jtr         2               // [ false, 42, 69 ]
+    popkr       2               // [ 69 ]
+    ret
+    popk                        // [ 42, 69 ]
+    popkn       1               // [ 42 ]
+    ret
+[1]
+    pushnumber  42              // [ 42 ]
+    pushnumber  69              // [ 42, 69 ]
+    pushinst    0               // [ 42, 69, function ]
+    supercall                   // [ 69 ]
+    pushdef     "print"         // [ 69, function ]
+    supercall                   // [ ]
+    halt
