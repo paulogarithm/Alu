@@ -215,6 +215,8 @@ char *strcut(const char *str, size_t from, size_t to)
     return buf;
 }
 
+/// Reads the int value from a byte array.
+/// `00 00 0c 7a -> (int) 3194`
 int bytesint(const alu_Byte *bytes)
 {
     int result = 0;
@@ -223,6 +225,7 @@ int bytesint(const alu_Byte *bytes)
     return result;
 }
 
+/// Reads the double value from a byte array.
 double bytesdouble(const unsigned char *bytes)
 {
     union
@@ -278,6 +281,7 @@ alu_Size Stack_len(alu_Stack *from)
     return n + 1;
 }
 
+// View pointers in the stack.
 void Stack_view(alu_Stack *from)
 {
     printf("[");
@@ -393,8 +397,12 @@ alu_Variable *Alu_cpyvar(alu_Variable *src)
 // Converts a variable of any type to a string.
 void Alu_tostring(alu_Variable *var)
 {
-    if (var->type == ALU_STRING or var->type == ALU_NULL)
+    alu_Type t = var->type;
+    if (t == ALU_STRING)
         return;
+    var->type = ALU_STRING;
+    if (t == ALU_NULL)
+        return strdup("null");
 }
 
 /**
@@ -911,6 +919,7 @@ void Alu_execute(alu_State *A)
     }
 }
 
+// Start a program.
 void Alu_start(alu_State *A, const alu_String input)
 {
     Alu_feed(A, input);
@@ -925,6 +934,7 @@ void Alu_start(alu_State *A, const alu_String input)
     Alu_execute(A);
 }
 
+// Start a program by filename.
 void Alu_startfile(alu_State *A, const alu_String filename)
 {
     int fd = open(filename, O_RDONLY);
@@ -947,17 +957,22 @@ void Alu_startfile(alu_State *A, const alu_String filename)
     remove(buffer);
 }
 
-void Alu_stackview(alu_State *A)
+/**
+ *
+ * @category Alu print
+ *
+ */
+
+_Bool Alu_print(alu_State *A)
 {
-    alu_Stack *ptr = A->stack;
-    printf("[ ");
-    while (ptr != null)
+    alu_Stack *element = A->stack;
+    alu_Variable *var = null;
+    while (element != null)
     {
-        printf("%d", *(alu_Size *)((alu_Variable *)ptr->data)->data);
-        printf("%s", ptr->next ? ", " : "");
-        ptr = ptr->next;
+        Alu_tostring(var);
+        puts(var->data);
+        element = element->next;
     }
-    printf(" ]\n");
 }
 
 /* Main */
@@ -966,11 +981,26 @@ int main(void)
 {
     alu_State *A = Alu_newstate();
     char input[] = {
-        OP_PUSHBOOL,    true,
-        OP_JTR,         0, 0, 0, 2,
-        OP_PUSHSTR,     'H', 'e', 'l', 'l', 'o', '\0',
+        OP_PUSHBOOL,
+        false,
+        OP_JTR,
+        0,
+        0,
+        0,
+        2,
+        OP_PUSHSTR,
+        'H',
+        'e',
+        'l',
+        'l',
+        'o',
+        '\0',
         OP_RET,
-        OP_PUSHSTR,     'F', 'o', 'o', '\0',
+        OP_PUSHSTR,
+        'F',
+        'o',
+        'o',
+        '\0',
         OP_RET,
         OP_HALT,
     };
