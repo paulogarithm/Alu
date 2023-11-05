@@ -33,17 +33,14 @@
     if (pointer != null) \
         free(pointer);
 
-#define return_e(ret, A, msg)                                   \
-    do                                                          \
-    {                                                           \
-        printf("[ERROR] %s:%d %s \n", __FILE__, __LINE__, msg); \
-        A->error = msg;                                         \
-        return ret;                                             \
-    } while (0)
-
-#define check(A, ret)       \
-    if (A == null or errno) \
-        return ret;
+#define returnerr(errnum, val)                        \
+    {                                                 \
+        printf("[ERROR] %s:%d %s \n",                 \
+               __FILE__, __LINE__, strerror(errnum)); \
+        return val;                                   \
+    }                                                 \
+    while (0)                                         \
+        ;
 
 #define ALU_VER_MAJ 0
 #define ALU_VER_MIN 2
@@ -61,6 +58,21 @@ typedef uint8_t alu_Byte;
 typedef double alu_Number;
 typedef char *alu_String;
 typedef uint32_t alu_Size;
+
+typedef enum
+{
+    AERR_IDK = 0, // Basic error
+    AERR_NOMEM,   // No memory left
+    AERR_STKLN,   // Stack too small
+    AERR_NOREG,   // No such register
+    AERR_NOSTK,   // No such element in stack
+    AERR_TYPES,   // Invalid combination of types
+    AERR_OUTJM,   // Out jump the conditions.
+    AERR_NOFIL,   // File doesnt exist
+
+    AERR_CREAD, // C Invalid read
+    AERR_CSTAT, // C Stat failure
+} alu_Errno;
 
 typedef enum
 {
@@ -174,14 +186,10 @@ static const alu_StructOpcode F[] = {
     [OP_HALT] = {null, 0},
     [OP_STACKCLOSE] = {Alu_stackclose, 0},
     [OP_SUMSTACK] = {Alu_sumstack, 0},
-
     [OP_LOAD] = {Alu_load, 1},
     [OP_UNLOAD] = {Alu_unload, 1},
-
     [OP_PUSHNUM] = {Alu_pushnumber, 2},
-
     [OP_PUSHSTR] = {Alu_pushstring, 3},
-
     [OP_PUSHBOOL] = {Alu_pushbool, 4},
     [OP_EVAL] = {Alu_eval, 4},
 };
@@ -205,6 +213,8 @@ char *strcut(const char *str, size_t from, size_t to)
 {
     size_t size = to - from;
     char *buf = (char *)malloc((size + 1) * sizeof(char));
+    if (buf == null)
+        returnerr(AERR_NOMEM, null);
     memset(buf, 0, size + 1);
     if (buf == null)
         return null;
@@ -261,7 +271,10 @@ void Stack_push(alu_Stack **stack, void *data)
 {
     alu_Stack *slate = (alu_Stack *)malloc(sizeof(alu_Stack));
     if (slate == null)
+    {
+
         return;
+    }
     slate->next = null;
     slate->data = data;
     if (*stack == null)
@@ -372,7 +385,9 @@ void *Alu_alloctype(alu_Type t)
 alu_Variable *Alu_newvariable(alu_Type type, void *data)
 {
     alu_Variable *var = (alu_Variable *)malloc(sizeof(alu_Variable));
-    if (var == null or data == null or type == ALU_NULL)
+    if (var == null)
+        returnerr(AERR_NOMEM, null);
+    if (data == null or type == ALU_NULL)
         return null;
     var->type = type;
     var->data = data;
@@ -402,7 +417,7 @@ void Alu_tostring(alu_Variable *var)
         return;
     var->type = ALU_STRING;
     if (t == ALU_NULL)
-        return strdup("null");
+        return;
 }
 
 /**
@@ -438,13 +453,17 @@ void Alu_stackclose(alu_State *A)
 void Alu_push(alu_State *A, void *ptr, size_t s, alu_Type t)
 {
     alu_Variable *var = null;
-    alu_Number *data = null;
-    check(A, );
+    void *data = null;
     data = malloc(s);
     if (data != null)
     {
         memset(data, 0, s);
         memcpy(data, ptr, s);
+    }
+    else
+    {
+        errno = ENOMEM;
+        return;
     }
     var = Alu_newvariable(t, data);
     if (var == null)
@@ -493,12 +512,11 @@ alu_Variable *Alu_pop(alu_State *A)
 alu_Variable *Alu_get(alu_State *A, alu_Size index)
 {
     alu_Stack *link = null;
-    check(A, null);
     link = A->stack;
     for (; index; link = (link ? link->next : null))
         --index;
     if (link == null)
-        return_e(null, A, "Reach end of stack");
+        returnerr(AERR_NOSTK, null);
     return ((alu_Variable *)link->data);
 }
 
@@ -571,11 +589,11 @@ void Alu_sumstack(alu_State *A)
     alu_Type t = ALU_NULL;
     void *data = null;
     if (Stack_len(A->stack) < 2)
-        return_e(, A, "Too few elements in the stack to add up.");
+        returnerr(AERR_STKLN, );
     a = Alu_get(A, 0);
     b = Alu_get(A, 1);
     if (a->type != b->type)
-        return_e(, A, "Elements types missmatch");
+        returnerr(AERR_TYPES, );
     t = a->type;
     data = Alu_sumvar(a, b);
     Alu_stackclose(A);
@@ -618,7 +636,7 @@ void Alu_load(alu_State *A, alu_Size registerIndex)
     alu_Register *reg = null;
 
     if (Stack_len(A->stack) < 1)
-        return_e(, A, "Too few elements in the stack to add up.");
+        returnerr(AERR_STKLN, );
     var = Alu_cpyvar(A->stack->data);
     Alu_stackclose(A);
     for (alu_Stack *r = A->regs; r != null; r = r->next)
@@ -629,15 +647,17 @@ void Alu_load(alu_State *A, alu_Size registerIndex)
             remove(reg->var);
             break;
         }
-    if (reg == null)
+    if (reg != null)
     {
-        reg = malloc(sizeof(alu_Register));
         reg->var = var;
-        reg->index = registerIndex;
-        Stack_push(&A->regs, reg);
         return;
     }
+    reg = (alu_Register *)malloc(sizeof(alu_Register));
+    if (reg == null)
+        returnerr(AERR_NOMEM, );
     reg->var = var;
+    reg->index = registerIndex;
+    Stack_push(&A->regs, reg);
 }
 
 /// Get the deep register and push it in the stack.
@@ -645,7 +665,6 @@ void Alu_load(alu_State *A, alu_Size registerIndex)
 void Alu_unload(alu_State *A, alu_Size registerIndex)
 {
     alu_Variable *var = null;
-
     for (alu_Stack *r = A->regs; r != null; r = r->next)
         if (((alu_Register *)r->data)->index == registerIndex)
         {
@@ -653,7 +672,7 @@ void Alu_unload(alu_State *A, alu_Size registerIndex)
             break;
         }
     if (var == null)
-        return_e(, A, "Reach end of registers.");
+        returnerr(AERR_NOREG, );
     Stack_push(&A->stack, Alu_cpyvar(var));
 }
 
@@ -666,7 +685,6 @@ void Alu_defunload(alu_State *A, alu_Size registerIndex)
 {
     alu_Stack *rgStack = null;
     alu_Variable *var = null;
-
     for (alu_Stack *r = A->regs; r != null; r = r->next)
         if (((alu_Register *)r->data)->index == registerIndex)
         {
@@ -674,7 +692,7 @@ void Alu_defunload(alu_State *A, alu_Size registerIndex)
             break;
         }
     if (var == null)
-        return_e(, A, "Reach end of registers.");
+        returnerr(AERR_NOREG, );
     Stack_push(&A->stack, var);
     rgStack = A->regs;
     A->regs = A->regs->next;
@@ -700,7 +718,7 @@ alu_State *Alu_newstate(void)
 {
     alu_State *A = (alu_State *)malloc(sizeof(alu_State));
     if (A == null)
-        return null;
+        returnerr(AERR_NOMEM, null);
     memset(A, 0, sizeof(alu_State));
     signal(SIGINT, __Alu_sighandler);
     A->seed = __Alu_seedgen(A);
@@ -764,7 +782,7 @@ void Alu_eval(alu_State *A, alu_Byte eval)
     alu_Variable *a = null, *b = null;
 
     if (Stack_len(A->stack) < 1)
-        return_e(, A, "Too few elements in the stack to add up.");
+        returnerr(AERR_STKLN, );
     a = Alu_get(A, 0);
     b = Alu_get(A, 1);
     if (a->type != b->type)
@@ -821,6 +839,8 @@ void Alu_feed(alu_State *A, const alu_String ptr)
             break;
         readlen = __Alu_readop(op, &ptr[n]);
         str = strcut(ptr, n, n + readlen + 1);
+        if (str == null)
+            break;
         n += readlen + 1;
         printf("Get: ");
         for (size_t i = 0; i <= readlen; ++i)
@@ -893,9 +913,15 @@ void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
     }
     int jumps = bytesint(((alu_Byte *)(*iptr)->data) + 1) + 1;
     printf("Jump %d instructions\n", jumps);
-    while (jumps-- and (*iptr != null))
-        *iptr = (*iptr)->next;
     Alu_popk(A);
+    if (jumps >= 0)
+        for (; jumps-- and (*iptr != null); *iptr = (*iptr)->next)
+            ;
+    else
+        for (; jumps++ and (*iptr != null); *iptr = (*iptr)->previous)
+            ;
+    if (*iptr == null)
+        returnerr(AERR_OUTJM, );
 }
 
 // Executes the instruction set.
@@ -903,13 +929,13 @@ void Alu_execute(alu_State *A)
 {
     alu_Stack2 *instruction = A->instructions;
     alu_Byte op = 0x00;
-    while (instruction != null)
+    while ((instruction != null) and (not errno))
     {
         op = ((alu_Byte *)instruction->data)[0];
         if (op == OP_RET)
             return;
         printf("Executes %02x\n", op);
-        if (op >= OP_JMP and op <= OP_JNEM)
+        if ((op >= OP_JMP) and (op <= OP_JNEM))
         {
             Alu_jump(A, op, &instruction);
             continue;
@@ -941,17 +967,17 @@ void Alu_startfile(alu_State *A, const alu_String filename)
     char *buffer = null;
     struct stat st = {0};
     if (fd == -1)
-        return_e(, A, strerror(errno));
+        returnerr(AERR_NOFIL, );
     if (stat(filename, &st) == -1)
-        return_e(, A, strerror(errno));
+        returnerr(errno, );
     buffer = malloc(sizeof(char) * (st.st_size + 1));
     if (buffer == null)
-        return_e(, A, strerror(errno));
+        returnerr(AERR_NOMEM, );
     memset(buffer, 0, st.st_size);
     if (read(fd, buffer, st.st_size) == -1)
     {
         remove(buffer);
-        return_e(, A, strerror(errno));
+        returnerr(errno, );
     }
     Alu_start(A, buffer);
     remove(buffer);
@@ -973,6 +999,7 @@ _Bool Alu_print(alu_State *A)
         puts(var->data);
         element = element->next;
     }
+    return true;
 }
 
 /* Main */
@@ -982,7 +1009,7 @@ int main(void)
     alu_State *A = Alu_newstate();
     char input[] = {
         OP_PUSHBOOL,
-        false,
+        true,
         OP_JTR,
         0,
         0,
