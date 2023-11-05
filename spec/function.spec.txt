@@ -1,5 +1,9 @@
 func Max(a, b)
-    if a < b then return b else return a end
+    if a < b then
+        return b
+    else
+        return a
+    end
 end
 
 let a = Max(42, 69)
@@ -8,12 +12,14 @@ print(a)
 <instructions:2>
 
 [0]
-    evalnice    sm              // [ false, 42, 69 ]
-    jtr         2               // [ false, 42, 69 ]
-    popkr       2               // [ 69 ]
+    tstackcpy                   // [ 42, 69 ]
+    eval        sm              // [ true ]
+    jfa         2               // [ ]
+    tpop                        // [ 42 ]
     ret
-    popk                        // [ 42, 69 ]
-    popkn       1               // [ 42 ]
+    tpop                        // [ 42 ]
+    tpop                        // [ 42, 69 ]
+    popk                        // [ 69 ]
     ret
 [1]
     pushnumber  42              // [ 42 ]
