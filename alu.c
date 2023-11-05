@@ -194,9 +194,16 @@ static const alu_StructOpcode F[] = {
     [OP_EVAL] = {Alu_eval, 4},
 };
 
+static const void *CONVERT_STRING[] = {
+    [ALU_NULL] = null,
+    [ALU_NUMBER] = null,
+    [ALU_STRING] = null,
+    [ALU_BOOL] = null,
+};
+
 /**
  *
- * @category C functions
+ * @category My C functions
  *
  */
 
@@ -377,6 +384,103 @@ void *Alu_alloctype(alu_Type t)
 
 /**
  *
+ * @category Alu string casting
+ *
+ */
+
+/// Converts a bool to an alu_String
+void __Alu_btoa(alu_Variable *var)
+{
+    _Bool value = *((_Bool *)var->data);
+    remove(var->data);
+    var->data = strdup(value ? "true" : "false");
+}
+
+/// Converts null to string
+void __Alu_nulltoa(alu_Variable *var)
+{
+    var->data = strdup("null");
+}
+
+size_t __Alu_ntoa_fillbuf(alu_String buf, size_t num, size_t epoch)
+{
+    size_t r = epoch;
+    if (num >= 10)
+        r = __Alu_ntoa_fillbuf(buf, num / 10, epoch + 1);
+    buf[epoch] = '0' + num % 10;
+    return r;
+}
+
+/// Get a pointer to :
+/// [0] = total, [1] = int, [2] = fract, [3] = signed
+size_t *__Alu_ntoa_infos(alu_Number num, size_t precision)
+{
+    size_t *part = (size_t *)malloc(sizeof(size_t) * 4);
+    if (part == null)
+        return null;
+    if (num < 0)
+        num *= -((short)(part[0] += ++part[3]));
+    for (size_t n = (part[1] = (size_t)num); n > 0; n /= 10)
+        ++(part[0]);
+    num -= (short)num;
+    for (; precision--;
+         part[2] *= ((!(int)(num * 10)) ? 1 : 10), part[2] += (num *= 10))
+        num -= (short)num;
+    part[0] += (part[2] != 0);
+    for (size_t n = part[2]; n > 0; n /= 10)
+        ++(part[0]);
+    return part;
+}
+
+// Converts an alu number into a string.
+void __Alu_ntoa(alu_Variable *var)
+{
+    alu_Number num = *((alu_Number *)var->data);
+    size_t *infos = __Alu_ntoa_infos(num, 6);
+    size_t index = 0;
+    remove(var->data);
+    var->data = null;
+    if (infos == null)
+        returnerr(AERR_NOMEM, );
+    var->data = (alu_String)malloc(sizeof(char) * (infos[0] + 1));
+    if (var->data == null)
+    {
+        remove(infos);
+        returnerr(AERR_NOMEM, );
+    }
+    memset(var->data, 0, (infos[0] + 1));
+    if (infos[3])
+        ((alu_String)var->data)[index++] = '-';
+    index = __Alu_ntoa_fillbuf(var->data, infos[1], index);
+    if (not infos[2])
+    {
+        remove(infos);
+        return;
+    }
+    ((alu_String)var->data)[index++] = '.';
+    __Alu_ntoa_fillbuf(var->data, infos[2], index);
+    remove(infos);
+}
+
+// Converts a variable of any type to a string.
+void Alu_vartostring(alu_Variable *var)
+{
+    if (var->type == ALU_STRING)
+        return;
+    ((void (*)(alu_Variable *))CONVERT_STRING[var->type])(var);
+    var->type = ALU_STRING;
+}
+
+// Converts stack[0] into a string.
+void Alu_tostring(alu_State *A)
+{
+    if (A->stack == null)
+        returnerr(AERR_STKLN, );
+    Alu_vartostring(A->stack->data);
+}
+
+/**
+ *
  * @category Alu variable
  *
  */
@@ -409,24 +513,13 @@ alu_Variable *Alu_cpyvar(alu_Variable *src)
     return dest;
 }
 
-// Converts a variable of any type to a string.
-void Alu_tostring(alu_Variable *var)
-{
-    alu_Type t = var->type;
-    if (t == ALU_STRING)
-        return;
-    var->type = ALU_STRING;
-    if (t == ALU_NULL)
-        return;
-}
-
 /**
  *
  * @category Alu Stack Manipulation
  *
  */
 
-/// Removes the first element of the stack.
+/// Removes stack[0] from the stack.
 /// `[a, b, c] -> [b, c]`
 void Alu_popk(alu_State *A)
 {
@@ -991,13 +1084,11 @@ void Alu_startfile(alu_State *A, const alu_String filename)
 
 _Bool Alu_print(alu_State *A)
 {
-    alu_Stack *element = A->stack;
-    alu_Variable *var = null;
-    while (element != null)
+    while (A->stack != null)
     {
-        Alu_tostring(var);
-        puts(var->data);
-        element = element->next;
+        Alu_tostring(A);
+        puts(((alu_Variable *)A->stack->data)->data);
+        Alu_popk(A);
     }
     return true;
 }
@@ -1008,11 +1099,26 @@ int main(void)
 {
     alu_State *A = Alu_newstate();
     char input[] = {
-        OP_PUSHBOOL,    false,
-        OP_JTR,         0, 0, 0, 2,
-        OP_PUSHSTR,     'H', 'e', 'l', 'l', 'o', '\0',
+        OP_PUSHBOOL,
+        false,
+        OP_JTR,
+        0,
+        0,
+        0,
+        2,
+        OP_PUSHSTR,
+        'H',
+        'e',
+        'l',
+        'l',
+        'o',
+        '\0',
         OP_RET,
-        OP_PUSHSTR,     'F', 'o', 'o', '\0',
+        OP_PUSHSTR,
+        'F',
+        'o',
+        'o',
+        '\0',
         OP_RET,
         OP_HALT,
     };
