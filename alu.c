@@ -33,14 +33,18 @@
     if (pointer != null) \
         free(pointer);
 
-#define returnerr(errnum, val)                        \
-    {                                                 \
-        printf("[ERROR] %s:%d %s \n",                 \
-               __FILE__, __LINE__, strerror(errnum)); \
-        return val;                                   \
-    }                                                 \
-    while (0)                                         \
+#define returnerr(errnum, val)              \
+    {                                       \
+        printf("[ERROR] %s:%d %d \n",       \
+               __FILE__, __LINE__, errnum); \
+        return val;                         \
+    }                                       \
+    while (0)                               \
         ;
+
+#define debug(A, msg, ...) \
+    if (A->verbose)        \
+    printf(msg, ##__VA_ARGS__)
 
 #define ALU_VER_MAJ 0
 #define ALU_VER_MIN 2
@@ -80,6 +84,7 @@ typedef enum
     ALU_NUMBER,
     ALU_STRING,
     ALU_BOOL,
+    ALU_CFUNC,
 } alu_Type;
 
 typedef enum
@@ -87,6 +92,7 @@ typedef enum
     // General
     OP_HALT = 0x00,
     OP_RET,
+    OP_WAIT,
 
     // Jumps
     OP_JMP,  // Jump
@@ -145,8 +151,9 @@ typedef struct
     alu_Stack *garbage;
     alu_Stack *regs;
     alu_Stack2 *instructions;
+
     alu_Size seed;
-    size_t pc;
+    _Bool verbose;
 } alu_State;
 
 typedef struct
@@ -177,6 +184,7 @@ void Alu_stackclose(alu_State *A);
 void Alu_sumstack(alu_State *A);
 void Alu_load(alu_State *A, alu_Size);
 void Alu_unload(alu_State *A, alu_Size);
+void Alu_wait(alu_State *A, alu_Size);
 void Alu_pushnumber(alu_State *A, alu_Number);
 void Alu_pushstring(alu_State *A, const alu_String);
 void Alu_pushbool(alu_State *A, _Bool);
@@ -188,17 +196,22 @@ static const alu_StructOpcode F[] = {
     [OP_SUMSTACK] = {Alu_sumstack, 0},
     [OP_LOAD] = {Alu_load, 1},
     [OP_UNLOAD] = {Alu_unload, 1},
+    [OP_WAIT] = {Alu_wait, 1},
     [OP_PUSHNUM] = {Alu_pushnumber, 2},
     [OP_PUSHSTR] = {Alu_pushstring, 3},
     [OP_PUSHBOOL] = {Alu_pushbool, 4},
     [OP_EVAL] = {Alu_eval, 4},
 };
 
+void __Alu_btoa(alu_Variable *var);
+void __Alu_nulltoa(alu_Variable *var);
+void __Alu_ntoa(alu_Variable *var);
+
 static const void *CONVERT_STRING[] = {
-    [ALU_NULL] = null,
-    [ALU_NUMBER] = null,
+    [ALU_NULL] = __Alu_nulltoa,
+    [ALU_NUMBER] = __Alu_ntoa,
     [ALU_STRING] = null,
-    [ALU_BOOL] = null,
+    [ALU_BOOL] = __Alu_btoa,
 };
 
 /**
@@ -207,15 +220,7 @@ static const void *CONVERT_STRING[] = {
  *
  */
 
-#define SIGNIFY(n) ((n > 0) - (n < 0))
-
-int faststrcmp(const char *s1, const char *s2)
-{
-    for (; *s1 and (*s1 == *s2); ++s1, ++s2)
-        ;
-    return SIGNIFY((unsigned char)*s1 - (unsigned char)*s2);
-}
-
+// Cuts a string from `from` to `to`.
 char *strcut(const char *str, size_t from, size_t to)
 {
     size_t size = to - from;
@@ -255,6 +260,17 @@ double bytesdouble(const unsigned char *bytes)
     for (int i = sizeof(double) - 1; i >= 0; i--)
         value.u |= ((uint64_t)bytes[i] << (shift++ * 8));
     return value.d;
+}
+
+void strrev(char *str)
+{
+    char swap = '\0';
+    for (size_t a = 0, b = strlen(str) - 1; a < b; ++a, --b)
+    {
+        swap = str[a];
+        str[a] = str[b];
+        str[b] = swap;
+    }
 }
 
 /**
@@ -333,15 +349,16 @@ alu_Stack2 *Stack2_top(alu_Stack2 *from)
 void Stack2_push(alu_Stack2 **stack, void *data)
 {
     alu_Stack2 *slate = (alu_Stack2 *)malloc(sizeof(alu_Stack2));
+    alu_Stack2 *top = Stack2_top(*stack);
     if (slate == null)
         return;
-    slate->previous = *stack;
+    slate->previous = top;
     slate->next = null;
     slate->data = data;
     if (*stack == null)
         *stack = slate;
     else
-        Stack2_top(*stack)->next = slate;
+        top->next = slate;
 }
 
 /**
@@ -402,13 +419,22 @@ void __Alu_nulltoa(alu_Variable *var)
     var->data = strdup("null");
 }
 
-size_t __Alu_ntoa_fillbuf(alu_String buf, size_t num, size_t epoch)
+/// Fill string with the double.
+void __Alu_ntoa_fillbuf(alu_String buf, size_t *infos)
 {
-    size_t r = epoch;
-    if (num >= 10)
-        r = __Alu_ntoa_fillbuf(buf, num / 10, epoch + 1);
-    buf[epoch] = '0' + num % 10;
-    return r;
+    size_t index = 0;
+    if (infos[2])
+    {
+        for (; infos[2]; infos[2] /= 10)
+            buf[index++] = '0' + (infos[2] % 10);
+        ((alu_String)buf)[index++] = '.';
+    }
+    for (; infos[1]; infos[1] /= 10)
+        buf[index++] = '0' + (infos[1] % 10);
+    if (infos[3])
+        ((alu_String)buf)[index++] = '-';
+    remove(infos);
+    strrev(buf);
 }
 
 /// Get a pointer to :
@@ -418,8 +444,8 @@ size_t *__Alu_ntoa_infos(alu_Number num, size_t precision)
     size_t *part = (size_t *)malloc(sizeof(size_t) * 4);
     if (part == null)
         return null;
-    if (num < 0)
-        num *= -((short)(part[0] += ++part[3]));
+    memset(part, 0, sizeof(size_t) * 4);
+    num *= ((num < 0) ? -((short)(part[0] += ++part[3])) : 1);
     for (size_t n = (part[1] = (size_t)num); n > 0; n /= 10)
         ++(part[0]);
     num -= (short)num;
@@ -437,7 +463,6 @@ void __Alu_ntoa(alu_Variable *var)
 {
     alu_Number num = *((alu_Number *)var->data);
     size_t *infos = __Alu_ntoa_infos(num, 6);
-    size_t index = 0;
     remove(var->data);
     var->data = null;
     if (infos == null)
@@ -449,17 +474,7 @@ void __Alu_ntoa(alu_Variable *var)
         returnerr(AERR_NOMEM, );
     }
     memset(var->data, 0, (infos[0] + 1));
-    if (infos[3])
-        ((alu_String)var->data)[index++] = '-';
-    index = __Alu_ntoa_fillbuf(var->data, infos[1], index);
-    if (not infos[2])
-    {
-        remove(infos);
-        return;
-    }
-    ((alu_String)var->data)[index++] = '.';
-    __Alu_ntoa_fillbuf(var->data, infos[2], index);
-    remove(infos);
+    __Alu_ntoa_fillbuf(var->data, infos);
 }
 
 // Converts a variable of any type to a string.
@@ -503,7 +518,8 @@ alu_Variable *Alu_cpyvar(alu_Variable *src)
 {
     alu_Variable *dest = (alu_Variable *)malloc(sizeof(alu_Variable));
     size_t s = Alu_sizeoftype(src->type);
-    s = ((s == 0 and src->type == ALU_STRING) ? ((strlen(src->data) + 1) * sizeof(char)) : s);
+    s = ((s == 0 and src->type == ALU_STRING) ?
+    ((strlen(src->data) + 1) * sizeof(char)) : s);
     if (s == 0)
         return null;
     dest->data = malloc(s);
@@ -583,6 +599,11 @@ void Alu_pushbool(alu_State *A, _Bool b)
 void Alu_pushstring(alu_State *A, const alu_String str)
 {
     Alu_push(A, str, ((strlen(str) + 1) * sizeof(char)), ALU_STRING);
+}
+
+void Alu_pushcfunc(alu_State *A, void (*f)(alu_State *))
+{
+    Alu_push(A, f, sizeof(void (*)(alu_State *)), ALU_CFUNC);
 }
 
 /// Pop a value from the stack and return it.
@@ -856,7 +877,8 @@ int Alu_close(alu_State *A)
         return 1;
     if (A->error or res)
     {
-        fprintf(stderr, "| [ERROR] Program ends with an error:\n| %s\n", A->error);
+        fprintf(stderr,
+        "| [ERROR] Program ends with an error:\n| %s\n", A->error);
         res = 1;
     }
     Alu_stackclose(A);
@@ -885,7 +907,7 @@ void Alu_eval(alu_State *A, alu_Byte eval)
         return;
     }
     if (a->type == ALU_STRING)
-        cmpres = faststrcmp(a->data, b->data);
+        cmpres = strcmp(a->data, b->data);
     else
         cmpres = (*((alu_Number *)a->data) - *((alu_Number *)b->data));
     ev |= (cmpres == 0) ? EVAL_EQUALS : 0;
@@ -924,7 +946,7 @@ void Alu_feed(alu_State *A, const alu_String ptr)
     alu_Byte op = 0x00;
     char *str = null;
     size_t n = 0, readlen = 0;
-    printf("=== Begin of instructions ===\n");
+    debug(A, "=== Begin of instructions ===\n");
     do
     {
         op = (alu_Byte)ptr[n];
@@ -935,13 +957,13 @@ void Alu_feed(alu_State *A, const alu_String ptr)
         if (str == null)
             break;
         n += readlen + 1;
-        printf("Get: ");
+        debug(A, "Get: ");
         for (size_t i = 0; i <= readlen; ++i)
-            printf("%02x ", str[i]);
-        printf("\n");
+            debug(A, "%02x ", str[i]);
+        debug(A, "\n");
         Stack2_push(&A->instructions, str);
     } while (true);
-    printf("Get: 00\n===  End of instructions  ===\n\n");
+    debug(A, "Get: 00\n===  End of instructions  ===\n\n");
 }
 
 // Execute the opcode instruction.
@@ -960,7 +982,8 @@ void __Alu_executeop(alu_State *A, alu_Opcode op, const alu_Byte *instructions)
         ((func2_t)F[op].func)(A, (alu_Number)bytesdouble(instructions + 1));
         break;
     case 3: // A, alu_String
-        str = strcut((char *)instructions, 1, strlen((char *)instructions + 1) + 1);
+        str = strcut(
+            (char *)instructions, 1, strlen((char *)instructions + 1) + 1);
         ((func3_t)F[op].func)(A, str);
         remove(str);
         break;
@@ -999,20 +1022,21 @@ void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
 {
     if (not __Alu_needtojump(A, op))
     {
-        printf("Dont jump\n");
+        debug(A, "Dont jump\n");
         *iptr = (*iptr)->next;
         Alu_popk(A);
         return;
     }
-    int jumps = bytesint(((alu_Byte *)(*iptr)->data) + 1) + 1;
-    printf("Jump %d instructions\n", jumps);
+    int jumps = bytesint(((alu_Byte *)(*iptr)->data) + 1);
+    jumps += (jumps > 0 ? 1 : -1);
+    debug(A, "Jump %d instructions\n", jumps);
     Alu_popk(A);
     if (jumps >= 0)
         for (; jumps-- and (*iptr != null); *iptr = (*iptr)->next)
             ;
     else
         for (; jumps++ and (*iptr != null); *iptr = (*iptr)->previous)
-            ;
+            debug(A, "> %p\n", (*iptr)->previous);
     if (*iptr == null)
         returnerr(AERR_OUTJM, );
 }
@@ -1027,7 +1051,7 @@ void Alu_execute(alu_State *A)
         op = ((alu_Byte *)instruction->data)[0];
         if (op == OP_RET)
             return;
-        printf("Executes %02x\n", op);
+        debug(A, "Executes %02x\n", op);
         if ((op >= OP_JMP) and (op <= OP_JNEM))
         {
             Alu_jump(A, op, &instruction);
@@ -1049,7 +1073,7 @@ void Alu_start(alu_State *A, const alu_String input)
         inst = inst->next;
         ++n;
     }
-    printf("There is %d instructions\n", n);
+    debug(A, "There is %d instructions\n", n);
     Alu_execute(A);
 }
 
@@ -1078,10 +1102,11 @@ void Alu_startfile(alu_State *A, const alu_String filename)
 
 /**
  *
- * @category Alu print
+ * @category Alu functions
  *
  */
 
+// Print stuff in stack, and empty it !
 _Bool Alu_print(alu_State *A)
 {
     while (A->stack != null)
@@ -1093,36 +1118,47 @@ _Bool Alu_print(alu_State *A)
     return true;
 }
 
+// Waits `ms` milliseconds.
+void Alu_wait(alu_State __attribute__((unused))*A, alu_Size ms)
+{
+    alu_Size a = 0, b = 0;
+    a = clock();
+    while (true)
+    {
+        b = ((clock() - a) / 1000);
+        if (b >= ms)
+            break;
+    }
+}
+
 /* Main */
 
 int main(void)
 {
     alu_State *A = Alu_newstate();
+    // char input[] = {
+    //     OP_PUSHNUM,     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    //     OP_LOAD,        0, 0, 0, 0,
+
+    //     OP_UNLOAD,      0, 0, 0, 0,
+    //     OP_PUSHNUM,     0x3f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    //     OP_SUMSTACK,
+    //     OP_LOAD,        0, 0, 0, 0,
+    //     OP_UNLOAD,      0, 0, 0, 0,
+    //     OP_PUSHNUM,     0x40, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    //     OP_EVAL,        (EVAL_GREATER | EVAL_EQUALS),
+    //     OP_JFA,         0xff, 0xff, 0xff, 0xfa, 
+    //     OP_UNLOAD,      0, 0, 0, 0,
+    //     OP_RET,
+    //     OP_HALT,
+    // };
+
     char input[] = {
-        OP_PUSHBOOL,
-        false,
-        OP_JTR,
-        0,
-        0,
-        0,
-        2,
-        OP_PUSHSTR,
-        'H',
-        'e',
-        'l',
-        'l',
-        'o',
-        '\0',
-        OP_RET,
-        OP_PUSHSTR,
-        'F',
-        'o',
-        'o',
-        '\0',
-        OP_RET,
+        OP_PUSHNUM,     0xc0, 0x2a, 0x47, 0xae, 0x14, 0x7a, 0xe1, 0x48,
         OP_HALT,
     };
     Alu_start(A, input);
+    Alu_tostring(A);
     printf("%s\n", Alu_getstring(A, 0));
     return Alu_close(A);
 }
