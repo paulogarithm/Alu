@@ -1,0 +1,8 @@
+cc = gcc
+flags = -Wall -Wextra -Werror -Ofast
+
+rule compile
+  command = $cc $flags -o $out $in
+  description = build $out
+
+build alu: compile alu.c
