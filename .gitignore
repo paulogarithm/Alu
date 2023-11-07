@@ -1,4 +1,7 @@
 .vscode/
-a.out
+*.out
 alu
 build/
+.ninja_*
+perm.sh
+vgcore*
