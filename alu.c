@@ -67,26 +67,28 @@ typedef uint32_t alu_Size;
 
 typedef enum
 {
-    AERR_IDK = 0, // Basic error
-    AERR_NOMEM,   // No memory left
-    AERR_STKLN,   // Stack too small
-    AERR_NOREG,   // No such register
-    AERR_NOSTK,   // No such element in stack
-    AERR_TYPES,   // Invalid combination of types
+    AERR_IDK = 0, // Basic error.
+    AERR_NOMEM,   // No memory left.
+    AERR_STKLN,   // Stack too small.
+    AERR_NOREG,   // No such register.
+    AERR_NOSTK,   // No such element in stack.
+    AERR_NOFND,   // Not found.
+    AERR_TYPES,   // Invalid combination of types.
     AERR_OUTJM,   // Out jump the conditions.
-    AERR_NOFIL,   // File doesnt exist
+    AERR_NOFIL,   // File doesnt exist.
 
-    AERR_CREAD, // C Invalid read
-    AERR_CSTAT, // C Stat failure
+    AERR_CREAD, // C Invalid read.
+    AERR_CSTAT, // C Stat failure.
 } alu_Errno;
 
 typedef enum
 {
-    ALU_NULL = 0,
-    ALU_NUMBER,
-    ALU_STRING,
-    ALU_BOOL,
-    ALU_CFUNC,
+    ALU_NULL = 0, // Nothing.
+    ALU_NUMBER,   // A double.
+    ALU_STRING,   // An allocated pointer to a character array.
+    ALU_BOOL,     // A value which is either true or false.
+    ALU_ABSTRACT, // A non-allocated C pointer.
+    ALU_INST,     // A pointer to the first instruction.
 } alu_Type;
 
 typedef enum
@@ -102,13 +104,19 @@ typedef enum
     OP_JEM,  // Jump if stack is empty
     OP_JNEM, // Jump if something is in the stack
 
-    // Stack
+    // Stack push
     OP_PUSHNUM,
     OP_PUSHSTR,
     OP_PUSHBOOL,
+    OP_PUSHDEF,
+
+    // Stack Manip
     OP_SUMSTACK,
     OP_STACKCLOSE,
     OP_EVAL,
+
+    // Functions
+    OP_CALL,
 
     // Registers
     OP_LOAD,
@@ -175,11 +183,19 @@ typedef struct
     alu_Byte argument;
 } alu_StructOpcode;
 
+typedef struct
+{
+    alu_String name;
+    void *f;
+} alu_Def;
+
 /**
  *
  * @category Static arrays & Declarations
  *
  */
+
+/* Op Code functions */
 
 void Alu_stackclose(alu_State *A);
 void Alu_sumstack(alu_State *A);
@@ -190,29 +206,47 @@ void Alu_pushnumber(alu_State *A, alu_Number);
 void Alu_pushstring(alu_State *A, const alu_String);
 void Alu_pushbool(alu_State *A, _Bool);
 void Alu_eval(alu_State *A, alu_Byte);
+void Alu_pushdef(alu_State *A, alu_String str);
+void Alu_call(alu_State *A);
 
 static const alu_StructOpcode F[] = {
     [OP_HALT] = {null, 0},
     [OP_STACKCLOSE] = {Alu_stackclose, 0},
     [OP_SUMSTACK] = {Alu_sumstack, 0},
+    [OP_CALL] = {Alu_call, 0},
     [OP_LOAD] = {Alu_load, 1},
     [OP_UNLOAD] = {Alu_unload, 1},
-    [OP_WAIT] = {Alu_wait, 1},
     [OP_PUSHNUM] = {Alu_pushnumber, 2},
     [OP_PUSHSTR] = {Alu_pushstring, 3},
+    [OP_PUSHDEF] = {Alu_pushdef, 3},
     [OP_PUSHBOOL] = {Alu_pushbool, 4},
     [OP_EVAL] = {Alu_eval, 4},
 };
 
+/* String Conversion Functions */
+
 void __Alu_btoa(alu_Variable *var);
 void __Alu_nulltoa(alu_Variable *var);
 void __Alu_ntoa(alu_Variable *var);
+void __Alu_abstracttoa(alu_Variable *var);
 
 static const void *CONVERT_STRING[] = {
     [ALU_NULL] = __Alu_nulltoa,
     [ALU_NUMBER] = __Alu_ntoa,
     [ALU_STRING] = null,
     [ALU_BOOL] = __Alu_btoa,
+    [ALU_ABSTRACT] = __Alu_abstracttoa,
+};
+
+/* Call Def Functions */
+
+void Alu_print(alu_State *);
+void Alu_wait(alu_State *, alu_Size);
+
+static const alu_Def DEF[] = {
+    {"print", Alu_print},
+    {"wait", Alu_wait},
+    {null, null},
 };
 
 /**
@@ -406,6 +440,30 @@ void *Alu_alloctype(alu_Type t)
  *
  */
 
+void __Alu_abstracttoa(alu_Variable *var)
+{
+    char *hex = "0123456789abcdef";
+    unsigned short base = 16;
+    uintptr_t ptr = (uintptr_t)var->data;
+    size_t nblen = 0;
+    alu_String str = null;
+
+    remove(var->data);
+    var->data = null;
+    for (uintptr_t n = ptr; n; n /= base)
+        ++nblen;
+    str = (char *)malloc(sizeof(char) * (nblen + 2 + 1));
+    if (str == null)
+        return;
+    memset(str, 0, (nblen + 2 + 1));
+    size_t index = 0;
+    for (; ptr; ptr /= base)
+        str[index++] = hex[ptr % base];
+    strcat(str, "x0");
+    strrev(str);
+    var->data = str;
+}
+
 /// Converts a bool to an alu_String
 void __Alu_btoa(alu_Variable *var)
 {
@@ -540,14 +598,17 @@ alu_Variable *Alu_cpyvar(alu_Variable *src)
 /// `[a, b, c] -> [b, c]`
 void Alu_popk(alu_State *A)
 {
-    alu_Stack *n = null;
+    alu_Stack *next = null;
+    alu_Variable *var = null;
     if (A->stack == null)
         return;
-    n = A->stack->next;
-    remove(((alu_Variable *)A->stack->data)->data);
-    remove(A->stack->data);
+    next = A->stack->next;
+    var = A->stack->data;
+    if (var->type != ALU_NULL and var->type != ALU_ABSTRACT)
+        remove(var->data);
+    remove(var);
     remove(A->stack);
-    A->stack = n;
+    A->stack = next;
 }
 
 /// Clears the stack of the `alu_State`.
@@ -582,33 +643,42 @@ void Alu_push(alu_State *A, const void *ptr, size_t s, alu_Type t)
 }
 
 /// Push a number in the stack.
-/// `Code -> Stack`
 void Alu_pushnumber(alu_State *A, alu_Number num)
 {
     Alu_push(A, &num, sizeof(alu_Number), ALU_NUMBER);
 }
 
 /// Push a boolean in the stack.
-/// `Code -> Stack`
 void Alu_pushbool(alu_State *A, _Bool b)
 {
     Alu_push(A, &b, sizeof(_Bool), ALU_BOOL);
 }
 
 /// Push a string in the stack.
-/// `Code -> Stack`
 void Alu_pushstring(alu_State *A, const alu_String str)
 {
     Alu_push(A, str, ((strlen(str) + 1) * sizeof(char)), ALU_STRING);
 }
 
-void Alu_pushcfunc(alu_State *A, void (*f)(alu_State *))
+/// Pushes a C pointer to the stack.
+void Alu_pushabstract(alu_State *A, void *pointer)
 {
-    Alu_push(A, f, sizeof(void (*)(alu_State *)), ALU_CFUNC);
+    alu_Variable *var = Alu_newvariable(ALU_ABSTRACT, pointer);
+    if (var == null)
+        return;
+    Stack_push(&A->stack, var);
+}
+
+/// Pushes a fefault functions
+void Alu_pushdef(alu_State *A, alu_String str)
+{
+    for (size_t n = 0; DEF[n].name != null; ++n)
+        if (strcmp(DEF[n].name, str) == 0)
+            return Alu_pushabstract(A, DEF[n].f);
+    raise(AERR_NOFND, );
 }
 
 /// Pop a value from the stack and return it.
-/// `Stack -> Code`
 alu_Variable *Alu_pop(alu_State *A)
 {
     alu_Stack *link = null;
@@ -849,7 +919,8 @@ void Alu_garbageclose(alu_State *A)
     {
         tmp = A->garbage->next;
         var = A->garbage->data;
-        remove(var->data);
+        if (var->type != ALU_ABSTRACT and var->type != ALU_NULL)
+            remove(var->data);
         remove(var);
         remove(A->garbage);
         A->garbage = tmp;
@@ -1132,6 +1203,23 @@ void Alu_wait(alu_State __attribute__((unused))*A, alu_Size ms)
     }
 }
 
+/// Execute the function in stack[0].
+void Alu_call(alu_State *A)
+{
+    alu_Variable *var = null;
+    func0_t fptr = null;
+    if (A->stack == null)
+        raise(AERR_NOSTK, );
+    var = Alu_pop(A);
+    if (var->type == ALU_ABSTRACT)
+    {
+        fptr = var->data;
+        fptr(A);
+    }
+    else
+        raise(AERR_TYPES, )
+}
+
 /* Main */
 
 int main(void)
@@ -1148,18 +1236,27 @@ int main(void)
     //     OP_UNLOAD,      0, 0, 0, 0,
     //     OP_PUSHNUM,     0x40, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     //     OP_EVAL,        (EVAL_GREATER | EVAL_EQUALS),
-    //     OP_JFA,         0xff, 0xff, 0xff, 0xfa, 
+    //     OP_JFA,         0xff, 0xff, 0xff, 0xfa,
     //     OP_UNLOAD,      0, 0, 0, 0,
     //     OP_RET,
     //     OP_HALT,
     // };
 
+    // char input[] = {
+    //     OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
+    //     OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
+    //     OP_PUSHNUM,     0xc0, 0xe3, 0x47, 0xae, 0x14, 0x7a, 0xe1, 0x48,
+    //     OP_SUMSTACK,
+    //     OP_HALT,
+    // };
+
+    // print(125.3)
     char input[] = {
-        OP_PUSHNUM,     0xc0, 0x2a, 0x47, 0xae, 0x14, 0x7a, 0xe1, 0x48,
+        OP_PUSHDEF,     'p', 'r', 'i', 'n', 't', '\0',
+        OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
+        OP_CALL,
         OP_HALT,
     };
     Alu_start(A, input);
-    Alu_tostring(A);
-    printf("%s\n", Alu_getstring(A, 0));
     return Alu_close(A);
 }
