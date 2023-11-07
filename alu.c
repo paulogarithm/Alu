@@ -33,13 +33,15 @@
     if (pointer != null) \
         free(pointer);
 
-#define returnerr(errnum, val)              \
-    {                                       \
-        printf("[ERROR] %s:%d %d \n",       \
-               __FILE__, __LINE__, errnum); \
-        return val;                         \
-    }                                       \
-    while (0)                               \
+#define raise(errnum, val)                    \
+    {                                         \
+        printf("[ERROR] in %s (%s:%d) %d \n", \
+               __FUNCTION__,                  \
+               __FILE__, __LINE__,            \
+               errnum);                       \
+        return val;                           \
+    }                                         \
+    while (0)                                 \
         ;
 
 #define debug(A, msg, ...) \
@@ -50,7 +52,7 @@
 #define ALU_VER_MIN 2
 #define ALU_VER_NUM (ALU_VER_MAJ * 100 + ALU_VER_MIN)
 
-#define ALU_SIGNATURE "\x1BALU"
+#define ALU_SIGNATURE "\x69CACA"
 
 /**
  *
@@ -92,7 +94,6 @@ typedef enum
     // General
     OP_HALT = 0x00,
     OP_RET,
-    OP_WAIT,
 
     // Jumps
     OP_JMP,  // Jump
@@ -226,7 +227,7 @@ char *strcut(const char *str, size_t from, size_t to)
     size_t size = to - from;
     char *buf = (char *)malloc((size + 1) * sizeof(char));
     if (buf == null)
-        returnerr(AERR_NOMEM, null);
+        raise(AERR_NOMEM, null);
     memset(buf, 0, size + 1);
     if (buf == null)
         return null;
@@ -466,12 +467,12 @@ void __Alu_ntoa(alu_Variable *var)
     remove(var->data);
     var->data = null;
     if (infos == null)
-        returnerr(AERR_NOMEM, );
+        raise(AERR_NOMEM, );
     var->data = (alu_String)malloc(sizeof(char) * (infos[0] + 1));
     if (var->data == null)
     {
         remove(infos);
-        returnerr(AERR_NOMEM, );
+        raise(AERR_NOMEM, );
     }
     memset(var->data, 0, (infos[0] + 1));
     __Alu_ntoa_fillbuf(var->data, infos);
@@ -490,7 +491,7 @@ void Alu_vartostring(alu_Variable *var)
 void Alu_tostring(alu_State *A)
 {
     if (A->stack == null)
-        returnerr(AERR_STKLN, );
+        raise(AERR_STKLN, );
     Alu_vartostring(A->stack->data);
 }
 
@@ -505,7 +506,7 @@ alu_Variable *Alu_newvariable(alu_Type type, void *data)
 {
     alu_Variable *var = (alu_Variable *)malloc(sizeof(alu_Variable));
     if (var == null)
-        returnerr(AERR_NOMEM, null);
+        raise(AERR_NOMEM, null);
     if (data == null or type == ALU_NULL)
         return null;
     var->type = type;
@@ -559,7 +560,7 @@ void Alu_stackclose(alu_State *A)
 
 /// Pushes an allocated version of `ptr` of type `t` in the stack.
 /// `Code -> Stack`
-void Alu_push(alu_State *A, void *ptr, size_t s, alu_Type t)
+void Alu_push(alu_State *A, const void *ptr, size_t s, alu_Type t)
 {
     alu_Variable *var = null;
     void *data = null;
@@ -630,7 +631,7 @@ alu_Variable *Alu_get(alu_State *A, alu_Size index)
     for (; index; link = (link ? link->next : null))
         --index;
     if (link == null)
-        returnerr(AERR_NOSTK, null);
+        raise(AERR_NOSTK, null);
     return ((alu_Variable *)link->data);
 }
 
@@ -703,11 +704,11 @@ void Alu_sumstack(alu_State *A)
     alu_Type t = ALU_NULL;
     void *data = null;
     if (Stack_len(A->stack) < 2)
-        returnerr(AERR_STKLN, );
+        raise(AERR_STKLN, );
     a = Alu_get(A, 0);
     b = Alu_get(A, 1);
     if (a->type != b->type)
-        returnerr(AERR_TYPES, );
+        raise(AERR_TYPES, );
     t = a->type;
     data = Alu_sumvar(a, b);
     Alu_stackclose(A);
@@ -750,7 +751,7 @@ void Alu_load(alu_State *A, alu_Size registerIndex)
     alu_Register *reg = null;
 
     if (Stack_len(A->stack) < 1)
-        returnerr(AERR_STKLN, );
+        raise(AERR_STKLN, );
     var = Alu_cpyvar(A->stack->data);
     Alu_stackclose(A);
     for (alu_Stack *r = A->regs; r != null; r = r->next)
@@ -768,7 +769,7 @@ void Alu_load(alu_State *A, alu_Size registerIndex)
     }
     reg = (alu_Register *)malloc(sizeof(alu_Register));
     if (reg == null)
-        returnerr(AERR_NOMEM, );
+        raise(AERR_NOMEM, );
     reg->var = var;
     reg->index = registerIndex;
     Stack_push(&A->regs, reg);
@@ -786,7 +787,7 @@ void Alu_unload(alu_State *A, alu_Size registerIndex)
             break;
         }
     if (var == null)
-        returnerr(AERR_NOREG, );
+        raise(AERR_NOREG, );
     Stack_push(&A->stack, Alu_cpyvar(var));
 }
 
@@ -806,7 +807,7 @@ void Alu_defunload(alu_State *A, alu_Size registerIndex)
             break;
         }
     if (var == null)
-        returnerr(AERR_NOREG, );
+        raise(AERR_NOREG, );
     Stack_push(&A->stack, var);
     rgStack = A->regs;
     A->regs = A->regs->next;
@@ -832,7 +833,7 @@ alu_State *Alu_newstate(void)
 {
     alu_State *A = (alu_State *)malloc(sizeof(alu_State));
     if (A == null)
-        returnerr(AERR_NOMEM, null);
+        raise(AERR_NOMEM, null);
     memset(A, 0, sizeof(alu_State));
     signal(SIGINT, __Alu_sighandler);
     A->seed = __Alu_seedgen(A);
@@ -878,7 +879,7 @@ int Alu_close(alu_State *A)
     if (A->error or res)
     {
         fprintf(stderr,
-        "| [ERROR] Program ends with an error:\n| %s\n", A->error);
+                "| [ERROR] Program ends with an error:\n| %s\n", A->error);
         res = 1;
     }
     Alu_stackclose(A);
@@ -897,7 +898,7 @@ void Alu_eval(alu_State *A, alu_Byte eval)
     alu_Variable *a = null, *b = null;
 
     if (Stack_len(A->stack) < 1)
-        returnerr(AERR_STKLN, );
+        raise(AERR_STKLN, );
     a = Alu_get(A, 0);
     b = Alu_get(A, 1);
     if (a->type != b->type)
@@ -1038,7 +1039,7 @@ void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
         for (; jumps++ and (*iptr != null); *iptr = (*iptr)->previous)
             debug(A, "> %p\n", (*iptr)->previous);
     if (*iptr == null)
-        returnerr(AERR_OUTJM, );
+        raise(AERR_OUTJM, );
 }
 
 // Executes the instruction set.
@@ -1084,17 +1085,17 @@ void Alu_startfile(alu_State *A, const alu_String filename)
     char *buffer = null;
     struct stat st = {0};
     if (fd == -1)
-        returnerr(AERR_NOFIL, );
+        raise(AERR_NOFIL, );
     if (stat(filename, &st) == -1)
-        returnerr(errno, );
+        raise(errno, );
     buffer = malloc(sizeof(char) * (st.st_size + 1));
     if (buffer == null)
-        returnerr(AERR_NOMEM, );
+        raise(AERR_NOMEM, );
     memset(buffer, 0, st.st_size);
     if (read(fd, buffer, st.st_size) == -1)
     {
         remove(buffer);
-        returnerr(errno, );
+        raise(errno, );
     }
     Alu_start(A, buffer);
     remove(buffer);
