@@ -52,7 +52,7 @@
 #define ALU_VER_MIN 2
 #define ALU_VER_NUM (ALU_VER_MAJ * 100 + ALU_VER_MIN)
 
-#define ALU_SIGNATURE "\x69CACA"
+#define ALU_SIGNATURE "\x1b\xca\xca"
 
 /**
  *
@@ -1093,8 +1093,9 @@ void Alu_execute(alu_State *A)
 }
 
 // Start a program.
-void Alu_start(alu_State *A, const alu_String input)
+void Alu_start(alu_State *A, alu_String input)
 {
+    input += strlen(ALU_SIGNATURE);
     Alu_feed(A, input);
     alu_Stack *inst = A->instructions;
     unsigned int n = 0;
@@ -1224,14 +1225,14 @@ int main(void)
     //     OP_HALT,
     // };
 
-    // print(125.3)
-    char input[] = {
-        OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
-        OP_PUSHDEF,     'p', 'r', 'i', 'n', 't', '\0',
-        OP_SUPER,
-        OP_CALL,
-        OP_HALT,
-    };
-    Alu_start(A, input);
+    // char input[] = {
+    //     0x1b, 0xca, 0xca,
+    //     OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
+    //     OP_PUSHDEF,     'p', 'r', 'i', 'n', 't', '\0',
+    //     OP_SUPER,
+    //     OP_CALL,
+    //     OP_HALT,
+    // };
+    Alu_startfile(A, "samples/file.alc");
     return Alu_close(A);
 }
