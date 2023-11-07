@@ -114,6 +114,7 @@ typedef enum
     OP_SUMSTACK,
     OP_STACKCLOSE,
     OP_EVAL,
+    OP_SUPER,
 
     // Functions
     OP_CALL,
@@ -140,18 +141,13 @@ typedef struct
     alu_Type type;
 } alu_Variable;
 
-typedef struct s_stack
-{
-    void *data;
-    struct s_stack *next;
-} alu_Stack;
-
 typedef struct s_stack2
 {
     void *data;
     struct s_stack2 *next;
     struct s_stack2 *previous;
-} alu_Stack2;
+    struct s_stack2 *top;
+} alu_Stack;
 
 typedef struct
 {
@@ -159,7 +155,7 @@ typedef struct
     alu_Stack *stack;
     alu_Stack *garbage;
     alu_Stack *regs;
-    alu_Stack2 *instructions;
+    alu_Stack *instructions;
 
     alu_Size seed;
     _Bool verbose;
@@ -208,12 +204,14 @@ void Alu_pushbool(alu_State *A, _Bool);
 void Alu_eval(alu_State *A, alu_Byte);
 void Alu_pushdef(alu_State *A, alu_String str);
 void Alu_call(alu_State *A);
+void Alu_super(alu_State *A);
 
 static const alu_StructOpcode F[] = {
     [OP_HALT] = {null, 0},
     [OP_STACKCLOSE] = {Alu_stackclose, 0},
     [OP_SUMSTACK] = {Alu_sumstack, 0},
     [OP_CALL] = {Alu_call, 0},
+    [OP_SUPER] = {Alu_super, 0},
     [OP_LOAD] = {Alu_load, 1},
     [OP_UNLOAD] = {Alu_unload, 1},
     [OP_PUSHNUM] = {Alu_pushnumber, 2},
@@ -310,35 +308,25 @@ void strrev(char *str)
 
 /**
  *
- * @category Stack functions
+ * @category Stack2 functions
  *
  */
 
-// Return a pointer to the last element of the stack.
-alu_Stack *Stack_top(alu_Stack *from)
-{
-    if (from == null)
-        return null;
-    for (; from->next != null;)
-        from = from->next;
-    return from;
-}
-
-// Pushes a slate into a stack.
+// Push data in a stack.
 void Stack_push(alu_Stack **stack, void *data)
 {
     alu_Stack *slate = (alu_Stack *)malloc(sizeof(alu_Stack));
     if (slate == null)
-    {
-
-        return;
-    }
+        raise(AERR_NOMEM,);
+    memset(slate, 0, sizeof(alu_Stack));
+    slate->previous = (*stack != null ? (*stack)->top : null);
     slate->next = null;
     slate->data = data;
     if (*stack == null)
         *stack = slate;
     else
-        Stack_top(*stack)->next = slate;
+        (*stack)->top->next = slate;
+    (*stack)->top = slate;
 }
 
 // Get the stack len from a pointer.
@@ -364,36 +352,6 @@ void Stack_view(alu_Stack *from)
             printf(" -> ");
     }
     printf("]\n");
-}
-
-/**
- *
- * @category Stack2 functions
- *
- */
-
-alu_Stack2 *Stack2_top(alu_Stack2 *from)
-{
-    if (from == null)
-        return null;
-    for (; from->next != null;)
-        from = from->next;
-    return from;
-}
-
-void Stack2_push(alu_Stack2 **stack, void *data)
-{
-    alu_Stack2 *slate = (alu_Stack2 *)malloc(sizeof(alu_Stack2));
-    alu_Stack2 *top = Stack2_top(*stack);
-    if (slate == null)
-        return;
-    slate->previous = top;
-    slate->next = null;
-    slate->data = data;
-    if (*stack == null)
-        *stack = slate;
-    else
-        top->next = slate;
 }
 
 /**
@@ -930,7 +888,7 @@ void Alu_garbageclose(alu_State *A)
 /// Close the `instructions`.
 void Alu_instructionclose(alu_State *A)
 {
-    alu_Stack2 *tmp = null;
+    alu_Stack *tmp = null;
     while (A->instructions != null)
     {
         tmp = A->instructions->next;
@@ -1033,7 +991,7 @@ void Alu_feed(alu_State *A, const alu_String ptr)
         for (size_t i = 0; i <= readlen; ++i)
             debug(A, "%02x ", str[i]);
         debug(A, "\n");
-        Stack2_push(&A->instructions, str);
+        Stack_push(&A->instructions, str);
     } while (true);
     debug(A, "Get: 00\n===  End of instructions  ===\n\n");
 }
@@ -1090,7 +1048,7 @@ _Bool __Alu_needtojump(alu_State *A, alu_Opcode op)
 }
 
 // Execute an OP_JUMP action.
-void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
+void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack **iptr)
 {
     if (not __Alu_needtojump(A, op))
     {
@@ -1116,7 +1074,7 @@ void Alu_jump(alu_State *A, alu_Opcode op, alu_Stack2 **iptr)
 // Executes the instruction set.
 void Alu_execute(alu_State *A)
 {
-    alu_Stack2 *instruction = A->instructions;
+    alu_Stack *instruction = A->instructions;
     alu_Byte op = 0x00;
     while ((instruction != null) and (not errno))
     {
@@ -1138,7 +1096,7 @@ void Alu_execute(alu_State *A)
 void Alu_start(alu_State *A, const alu_String input)
 {
     Alu_feed(A, input);
-    alu_Stack2 *inst = A->instructions;
+    alu_Stack *inst = A->instructions;
     unsigned int n = 0;
     while (inst != null)
     {
@@ -1219,6 +1177,23 @@ void Alu_call(alu_State *A)
         raise(AERR_TYPES, )
 }
 
+// Set the head element to the top.
+void Alu_super(alu_State *A)
+{
+    alu_Stack *super = null, *degrade = null;
+    if (Stack_len(A->stack) < 2)
+        raise(AERR_STKLN,);
+    super = A->stack->top;
+    degrade = A->stack;
+    degrade->top = null;
+    super->top = super->previous;
+    super->previous->next = null;
+    super->previous = null;
+    super->next = degrade;
+    degrade->previous = super;
+    A->stack = super;
+}
+
 /* Main */
 
 int main(void)
@@ -1251,8 +1226,9 @@ int main(void)
 
     // print(125.3)
     char input[] = {
-        OP_PUSHDEF,     'p', 'r', 'i', 'n', 't', '\0',
         OP_PUSHNUM,     0x40, 0x5f, 0x53, 0x33, 0x33, 0x33, 0x33, 0x34,
+        OP_PUSHDEF,     'p', 'r', 'i', 'n', 't', '\0',
+        OP_SUPER,
         OP_CALL,
         OP_HALT,
     };
