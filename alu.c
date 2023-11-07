@@ -1179,7 +1179,7 @@ void Alu_startfile(alu_State *A, const alu_String filename)
  */
 
 // Print stuff in stack, and empty it !
-_Bool Alu_print(alu_State *A)
+void Alu_print(alu_State *A)
 {
     while (A->stack != null)
     {
@@ -1187,7 +1187,6 @@ _Bool Alu_print(alu_State *A)
         puts(((alu_Variable *)A->stack->data)->data);
         Alu_popk(A);
     }
-    return true;
 }
 
 // Waits `ms` milliseconds.
